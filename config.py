@@ -1,12 +1,20 @@
-# config.py
-
 import streamlit as st
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
 
-# 使用するAI
+try:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+
+try:
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+except:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+
 AI_MODEL = "gemini"
