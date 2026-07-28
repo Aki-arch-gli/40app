@@ -4,9 +4,8 @@ from config import GEMINI_API_KEY
 
 
 # Gemini設定
-client = genai.Client(
-    api_key=GEMINI_API_KEY
-)
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 
 def create_prompt(age, disease, calorie, simple=False):
