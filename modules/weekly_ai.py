@@ -1,4 +1,4 @@
-from google import genai
+import google.generativeai as genai
 from dotenv import load_dotenv
 import os
 import time
@@ -7,9 +7,7 @@ import time
 load_dotenv()
 
 
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
-)
+genai.configure(api_key=GEMINI_API_KEY)
 
 
 def generate_weekly_ai(
