@@ -1,0 +1,32 @@
+# API keys
+.streamlit/secrets.toml
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database
+*.db
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# API secrets
+.env
+.streamlit/secrets.toml
+
+# Python cache
+__pycache__/
+
+# Database
+*.db
+
+# Generated files
+*.mp3
+uploads/
