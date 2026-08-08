@@ -1,12 +1,8 @@
 import re
-import google.generativeai as genai
+from google import genai
 import openai
 
 from config import *
-
-if GEMINI_API_KEY:
-
-    genai.configure(api_key=GEMINI_API_KEY)
 
 if OPENAI_API_KEY:
 

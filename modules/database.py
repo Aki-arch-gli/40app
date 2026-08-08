@@ -5,7 +5,15 @@ import random
 from datetime import datetime
 
 
-DB_NAME = "health.db"
+import os
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+
+DB_NAME = os.path.join(
+    BASE_DIR,
+    "database",
+    "health.db"
+)
 
 
 
@@ -79,8 +87,40 @@ def create_tables():
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS events(
 
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
 
+    title TEXT,
+
+    description TEXT,
+
+    datetime TEXT,
+
+    place TEXT,
+
+    target TEXT,
+
+    capacity TEXT,
+
+    fee TEXT,
+
+    teacher TEXT,
+
+    application TEXT,
+
+    contact TEXT,
+
+    url TEXT UNIQUE,
+
+    image TEXT,
+
+    pdf TEXT
+
+    )
+    """)
+  
     # =====================
     # 水分管理
     # =====================
@@ -1369,3 +1409,342 @@ def get_menu_by_id(menu_id):
                 )
 
     return None
+
+def get_events():
+
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM events
+        ORDER BY updated DESC
+    """)
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return rows
+
+def get_recommended_events(limit=5):
+
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM events
+        ORDER BY datetime
+        LIMIT ?
+    """, (limit,))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+def save_event(event):
+    # タイトルまたはURLがない空データは保存しない
+    if not event.get("title") or not event.get("url"):
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    # updated カラムが存在しない場合に自動追加
+    try:
+        cur.execute("ALTER TABLE events ADD COLUMN updated TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cur.execute("""
+    INSERT INTO events(
+        title,
+        description,
+        datetime,
+        place,
+        target,
+        capacity,
+        fee,
+        teacher,
+        application,
+        contact,
+        url,
+        image,
+        pdf,
+        updated
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(url) DO UPDATE SET
+        title=excluded.title,
+        description=excluded.description,
+        datetime=excluded.datetime,
+        place=excluded.place,
+        target=excluded.target,
+        capacity=excluded.capacity,
+        fee=excluded.fee,
+        teacher=excluded.teacher,
+        application=excluded.application,
+        contact=excluded.contact,
+        image=excluded.image,
+        pdf=excluded.pdf,
+        updated=excluded.updated
+    """, (
+        event.get("title", ""),
+        event.get("description", ""),
+        event.get("datetime", ""),
+        event.get("place", ""),
+        event.get("target", ""),
+        event.get("capacity", ""),
+        event.get("fee", ""),
+        event.get("teacher", ""),
+        event.get("application", ""),
+        event.get("contact", ""),
+        event.get("url", ""),
+        ",".join(event.get("images", [])),
+        ",".join(event.get("pdfs", [])),
+        today
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_recommended_events(limit=5):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    # タイトルが存在するデータのみ取得
+    cur.execute("""
+        SELECT *
+        FROM events
+        WHERE title != '' AND title IS NOT NULL
+        ORDER BY id DESC
+        LIMIT ?
+    """, (limit,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+# =========================================================
+# Phase 4〜11 ロードマップ機能追加用コード（末尾に追記してください）
+# =========================================================
+
+# --- 1. スキーマの更新（既存テーブルに不足カラムを追加＆新規テーブルを作成） ---
+def update_schema_for_roadmap():
+    """既存のDBに新しいロードマップ用のカラムやテーブルを追加する安全な処理"""
+    conn = connect()
+    cur = conn.cursor()
+
+    # usersテーブルに新しいカラムを追加（既に存在する場合はスキップ）
+    for column, col_type in [("role", "TEXT DEFAULT '高齢者'"), 
+                             ("occupation", "TEXT DEFAULT '無職/退職'"), 
+                             ("badges", "TEXT DEFAULT ''")]:
+        try:
+            cur.execute(f"ALTER TABLE users ADD COLUMN {column} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # 既にある場合はエラーを無視
+
+    # postsテーブルにタグ・評価・ユーザー属性カラムを追加
+    for column, col_type in [("user_age", "INTEGER DEFAULT 70"), 
+                             ("user_disease", "TEXT DEFAULT '高血圧'"), 
+                             ("rating", "INTEGER DEFAULT 5"), 
+                             ("tag", "TEXT DEFAULT ''")]:
+        try:
+            cur.execute(f"ALTER TABLE posts ADD COLUMN {column} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
+    # recommended_menusテーブルに季節タグを追加
+    try:
+        cur.execute("ALTER TABLE recommended_menus ADD COLUMN season TEXT DEFAULT '通年'")
+    except sqlite3.OperationalError:
+        pass
+
+    # 新規テーブルの作成（存在しない場合のみ）
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS family_logs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        sender TEXT,
+        log_type TEXT,
+        content TEXT,
+        created_at TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS family_comments(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        commenter TEXT,
+        message TEXT,
+        created_at TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS daily_tasks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        date TEXT,
+        walk INTEGER DEFAULT 0,
+        exercise INTEGER DEFAULT 0,
+        medicine INTEGER DEFAULT 0,
+        water INTEGER DEFAULT 0,
+        dementia_prev INTEGER DEFAULT 0
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# アプリ起動時にスキーマ更新を自動実行
+try:
+    update_schema_for_roadmap()
+except Exception as e:
+    pass
+
+
+# --- 2. ユーザー登録・更新（UPSERT対応） ---
+def add_or_update_user(name, role, age, gender, height, weight, occupation, disease, mode):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE name=?", (name,))
+    exists = cur.fetchone()
+    if exists:
+        cur.execute("""
+        UPDATE users SET role=?, age=?, gender=?, height=?, weight=?, occupation=?, disease=?, mode=?
+        WHERE name=?
+        """, (role, age, gender, height, weight, occupation, disease, mode, name))
+    else:
+        cur.execute("""
+        INSERT INTO users (name, role, age, gender, height, weight, occupation, disease, mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, role, age, gender, height, weight, occupation, disease, mode))
+    conn.commit()
+    conn.close()
+
+def get_all_seniors():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE role LIKE '%高齢者%' OR mode LIKE '%高齢者%'")
+    users = cur.fetchall()
+    conn.close()
+    return users
+
+
+# --- 3. Phase 8: 生活支援チェックリスト ---
+def get_daily_task(username, date_str):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM daily_tasks WHERE username=? AND date=?", (username, date_str))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        # dict形式に変換して返却
+        return {"walk": row[3], "exercise": row[4], "medicine": row[5], "water": row[6], "dementia_prev": row[7]}
+    return None
+
+def save_daily_task(username, date_str, walk, exercise, medicine, water, dementia_prev):
+    conn = connect()
+    cur = conn.cursor()
+    task = get_daily_task(username, date_str)
+    if task:
+        cur.execute("""
+        UPDATE daily_tasks SET walk=?, exercise=?, medicine=?, water=?, dementia_prev=?
+        WHERE username=? AND date=?
+        """, (walk, exercise, medicine, water, dementia_prev, username, date_str))
+    else:
+        cur.execute("""
+        INSERT INTO daily_tasks (username, date, walk, exercise, medicine, water, dementia_prev)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (walk, exercise, medicine, water, dementia_prev, username, date_str))
+    conn.commit()
+    conn.close()
+
+
+# --- 4. Phase 5: 家族見守り機能 ---
+def add_family_log(username, sender, log_type, content):
+    conn = connect()
+    cur = conn.cursor()
+    today = datetime.now().strftime("%Y-%m-%d %H:%M")
+    cur.execute("INSERT INTO family_logs (username, sender, log_type, content, created_at) VALUES (?,?,?,?,?)",
+                (username, sender, log_type, content, today))
+    conn.commit()
+    conn.close()
+
+def get_family_logs(username):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT username, sender, log_type, content, created_at FROM family_logs WHERE username=? ORDER BY id DESC LIMIT 20", (username,))
+    logs = cur.fetchall()
+    conn.close()
+    return [{"username": r[0], "sender": r[1], "log_type": r[2], "content": r[3], "created_at": r[4]} for r in logs]
+
+def add_family_comment(username, commenter, message):
+    conn = connect()
+    cur = conn.cursor()
+    today = datetime.now().strftime("%Y-%m-%d %H:%M")
+    cur.execute("INSERT INTO family_comments (username, commenter, message, created_at) VALUES (?,?,?,?)",
+                (username, commenter, message, today))
+    conn.commit()
+    conn.close()
+
+def get_family_comments(username):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT username, commenter, message, created_at FROM family_comments WHERE username=? ORDER BY id DESC LIMIT 10", (username,))
+    comments = cur.fetchall()
+    conn.close()
+    return [{"username": r[0], "commenter": r[1], "message": r[2], "created_at": r[3]} for r in comments]
+
+
+# --- 5. Phase 4: コミュニティ検索フィルター ---
+def get_posts_filtered(age_group=None, disease=None, tag=None):
+    conn = connect()
+    cur = conn.cursor()
+    query = "SELECT id, username, message, image, breakfast, lunch, dinner, created_at, likes, user_age, user_disease, rating, tag FROM posts WHERE 1=1"
+    params = []
+    
+    if age_group and age_group != "全年代":
+        try:
+            min_a = int(age_group.replace("代", "").replace("以上", ""))
+            query += " AND user_age >= ? AND user_age < ?"
+            params.extend([min_a, min_a + 10])
+        except:
+            pass
+            
+    if disease and disease != "全疾患":
+        query += " AND user_disease = ?"
+        params.append(disease)
+        
+    if tag and tag != "全タグ":
+        query += " AND tag LIKE ?"
+        params.append(f"%{tag}%")
+        
+    query += " ORDER BY id DESC LIMIT 30"
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    conn.close()
+    
+    posts = []
+    for r in rows:
+        posts.append({
+            "id": r[0], "username": r[1], "message": r[2], "image": r[3],
+            "breakfast": r[4], "lunch": r[5], "dinner": r[6], "created_at": r[7],
+            "likes": r[8], "user_age": r[9] if r[9] else 70,
+            "user_disease": r[10] if r[10] else "高血圧",
+            "rating": r[11] if r[11] else 5, "tag": r[12] if r[12] else "一般"
+        })
+    return posts

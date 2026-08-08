@@ -6,6 +6,11 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+
+*.db
+*.sqlite
+*.sqlite3
 
 # Database
 *.db

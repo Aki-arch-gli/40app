@@ -1,10 +1,11 @@
 streamlit
 pandas
-matplotlib
-plotly
+beautifulsoup4
 python-dotenv
 google-generativeai
-gtts
-reportlab
+gTTS
+matplotlib
 openai
-google-generativeai
+plotly
+reportlab
+requests

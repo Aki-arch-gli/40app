@@ -89,21 +89,12 @@ def health_record(username):
 
 
 
-    water = st.slider(
-
-        "今日飲んだ水分(mL)",
-
-        0,
-
-        3000,
-
-        1200,
-
-        step=100,
-
-        key="health_water"
-
+    st.metric(
+        "💧 今日の水分量",
+        f"{st.session_state.water_today} mL"
     )
+
+    water = st.session_state.water_today
 
 
 

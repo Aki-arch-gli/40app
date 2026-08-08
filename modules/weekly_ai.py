@@ -1,13 +1,12 @@
-import google.generativeai as genai
-from dotenv import load_dotenv
-import os
+from google import genai
+from config import GEMINI_API_KEY
+from config import AI_MODEL
+
+client = genai.Client(
+    api_key=GEMINI_API_KEY
+)
+
 import time
-
-
-load_dotenv()
-
-
-genai.configure(api_key=GEMINI_API_KEY)
 
 
 def generate_weekly_ai(
@@ -68,9 +67,9 @@ def generate_weekly_ai(
 
     models = [
 
-        "gemini-flash-latest",
+        "gemini-3.5-flash",
 
-        "gemini-1.5-flash"
+        "gemini-3.5-flash-lite"
 
     ]
 
@@ -84,7 +83,7 @@ def generate_weekly_ai(
 
             response = client.models.generate_content(
 
-                model=model,
+                model=AI_MODEL,
 
                 contents=prompt
 

@@ -1,12 +1,44 @@
-import google.generativeai as genai
-
+from google import genai
 from config import GEMINI_API_KEY
+import json
+from config import AI_MODEL
+
+client = genai.Client(
+    api_key=GEMINI_API_KEY
+)
 
 
-# Gemini設定
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+def ask_ai(prompt):
 
+    MODELS = [
+      "gemini-3.5-flash",
+      "gemini-3.1-flash-lite",
+       "gemini-2.0-flash",
+      "gemini-flash-latest",
+    ]
+
+    last_error = ""
+
+    for model in MODELS:
+
+        try:
+            print("AI_MODEL =", AI_MODEL)
+
+            response = client.models.generate_content(
+
+                model=model,
+
+                contents=prompt
+
+            )
+
+            return response.text
+
+        except Exception as e:
+
+            last_error = str(e)
+
+    raise Exception(last_error)
 
 def create_prompt(age, disease, calorie, simple=False):
 
@@ -84,133 +116,69 @@ def generate_ai_menu(
         simple
     )
 
-    models = [
-        "gemini-flash-latest",
-        "gemini-2.0-flash"
-    ]
+    try:
 
+        return ask_ai(prompt)
 
-    last_error = ""
+    except Exception:
 
-
-    for model in models:
-
-        try:
-
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt
-            )
-
-            return response.text
-
-
-        except Exception as e:
-
-            last_error = str(e)
-
-
-    return f"""
-現在AIサーバーが混雑しています。
-
-時間をおいて再度お試しください。
-
-{last_error}
-"""
+        return "AI献立を作成できませんでした。"
 
 
 def generate_weekly_ai_menu(
+
     age,
+
     disease,
+
     calorie
+
 ):
 
-    prompt = f"""
-あなたは高齢者専門の管理栄養士です。
+    prompt = ...
 
-年齢：{age}歳
-疾患：{disease}
-必要カロリー：約{calorie}kcal
+    try:
 
-高齢者が1週間続けやすい献立を作成してください。
+        return ask_ai(prompt)
 
-必ず以下の形式で回答してください。
+    except Exception:
 
-【月曜日】
-朝
-・料理
-・料理
-・料理
+        return "週間献立を作成できませんでした。"
 
-昼
-・料理
-・料理
-・料理
+def generate_daily_news():
 
-夜
-・料理
-・料理
-・料理
+    prompt = """
+高齢者向け健康ワンポイントを100文字以内で作ってください。
 
+JSON形式のみ。
 
-【火曜日】
-...
-
-【水曜日】
-...
-
-【木曜日】
-...
-
-【金曜日】
-...
-
-【土曜日】
-...
-
-【日曜日】
-...
-
-
-【ルール】
-
-・料理名だけ
-
-・説明不要
-
-・カロリー不要
-
-・栄養説明不要
-
-・やわらかい料理を中心
-
-・日本食中心
-
-・毎日違う献立
+{
+    "comment":"..."
+}
 """
 
+    try:
 
-    models = [
-        "gemini-flash-latest",
-        "gemini-2.0-flash"
-    ]
+        text = ask_ai(prompt)
 
+        import json
 
-    for model in models:
+        text = text.replace(
+            "```json",
+            ""
+        ).replace(
+            "```",
+            ""
+        ).strip()
 
-        try:
+        return json.loads(text)
 
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt
-            )
+    except Exception:
 
-            return response.text
+        return {
 
+            "comment":
 
-        except Exception:
+            "今日はこまめな水分補給を心がけましょう。"
 
-            pass
-
-
-    return "週間献立を作成できませんでした。"
+        }
