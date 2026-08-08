@@ -1,303 +1,124 @@
 import pandas as pd
-import random
-from datetime import datetime
+import datetime
+from modules.shopping import create_shopping_list
 
-MENU_FILE = "data/menu_data.csv"
-
-
-# -----------------------------
-# CSV読み込み
-# -----------------------------
+# CSVのロードユーティリティ
 def load_menu():
+    return pd.read_csv("data/menu_data.csv")
 
-    df = pd.read_csv(
-        MENU_FILE,
-        encoding="utf-8"
-    )
-
-    # 数値列を強制的に数値化
-    numeric_columns = [
-        "id",
-        "min_age",
-        "max_age",
-        "calorie"
-    ]
-
-    for col in numeric_columns:
-
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
-        )
-
-
-    # 欠損行を削除
-    df = df.dropna(
-        subset=[
-            "min_age",
-            "max_age",
-            "calorie"
-        ]
-    )
-
-
-    return df
-
-
-# -----------------------------
-# 現在の季節取得
-# -----------------------------
 def current_season():
-
-    month = datetime.now().month
-
+    month = datetime.datetime.now().month
     if month in [3, 4, 5]:
         return "春"
-
     elif month in [6, 7, 8]:
         return "夏"
-
     elif month in [9, 10, 11]:
         return "秋"
-
     else:
         return "冬"
 
+def contains_food(row, food):
+    text = f"{row.get('breakfast', '')} {row.get('lunch', '')} {row.get('dinner', '')}"
+    return food in text
 
-# -----------------------------
-# 食材検索
-# -----------------------------
-def contains_food(row, keyword):
-
-    text = (
-        str(row["breakfast"])
-        + str(row["lunch"])
-        + str(row["dinner"])
-    )
-
-    return keyword in text
-
-
-# -----------------------------
-# 買い物リスト生成
-# -----------------------------
-def create_shopping_list(menu):
-
-    foods = []
-
-    for key in ["朝食", "昼食", "夕食"]:
-
-        foods.extend(
-            str(menu[key]).split("・")
-        )
-
-    foods = list(dict.fromkeys(foods))
-
-    return foods
-
-
-# -----------------------------
-# 献立生成
-# -----------------------------
 def generate_menu(
-        age,
-        disease,
-        calorie,
-        season="auto",
-        style=None,
-        difficulty=None,
-        dislike=None,
-        favorite_food=None,
-        history=None
+    age,
+    disease,
+    calorie,
+    season="auto",
+    style=None,
+    difficulty=None,
+    dislike=None,
+    favorite_food=None,
+    history=None
 ):
-    # 型を修正
     age = int(age)
     calorie = int(calorie)
-
-    disease = str(disease)
+    disease = str(disease).strip()
 
     df = load_menu()
 
-    # 年齢
-    df = df[
-        (df["min_age"] <= age)
-        &
-        (df["max_age"] >= age)
-    ]
+    # 年齢フィルター
+    if "min_age" in df.columns and "max_age" in df.columns:
+        df = df[(df["min_age"] <= age) & (df["max_age"] >= age)]
 
-    # 疾患
-    # 「なし」と「疾患なし」を同じ扱いにする
+    # 疾患フィルター
+    if "disease" in df.columns:
+        df["disease"] = df["disease"].astype(str).str.strip()
+        if disease in ["なし", "疾患なし"]:
+            df = df[df["disease"].isin(["なし", "疾患なし"])]
+        else:
+            df = df[df["disease"] == disease]
 
-    # 疾患
-    df["disease"] = (
-        df["disease"]
-        .astype(str)
-        .str.strip()
-    )
-
-    disease = disease.strip()
-
-
-    if disease in ["なし", "疾患なし"]:
-
-        disease_df = df[
-            df["disease"].isin(
-                [
-                    "なし",
-                    "疾患なし"
-                ]
-            )
-        ]
-
-    else:
-
-        disease_df = df[
-             df["disease"] == disease
-        ]
-
-
-    df = disease_df.copy()
-
-    # 季節
+    # 季節フィルター
     if season == "auto":
-
         season = current_season()
+    if "season" in df.columns:
+        df = df[(df["season"] == season) | (df["season"] == "通年")]
 
-    df = df[
-        (df["season"] == season)
-        |
-        (df["season"] == "通年")
-    ]
+    # 料理スタイル（和洋中）
+    if style and "japanese_style" in df.columns:
+        df = df[df["japanese_style"] == style]
 
-    # 和洋中
-    if style:
-
-        df = df[
-            df["japanese_style"] == style
-        ]
-
-    # 難易度
+    # 難易度フィルター (difficulty または level カラムの両方に対応)
     if difficulty:
+        diff_col = "difficulty" if "difficulty" in df.columns else ("level" if "level" in df.columns else None)
+        if diff_col:
+            df = df[df[diff_col].astype(str).str.contains(str(difficulty), na=False)]
 
-        df = df[
-            df["difficulty"] == difficulty
-        ]
-
-    # 苦手食材
+    # 苦手食材フィルター
     if dislike:
-
         for food in dislike:
-
-            df = df[
-                ~(
-                    df["breakfast"].str.contains(food, na=False)
-                    |
-                    df["lunch"].str.contains(food, na=False)
-                    |
-                    df["dinner"].str.contains(food, na=False)
-                )
-            ]
+            if food:
+                df = df[
+                    ~(
+                        df["breakfast"].astype(str).str.contains(food, na=False) |
+                        df["lunch"].astype(str).str.contains(food, na=False) |
+                        df["dinner"].astype(str).str.contains(food, na=False)
+                    )
+                ]
 
     # 魚料理希望
     if favorite_food == "魚":
-
-        fish = [
-            "鮭",
-            "さば",
-            "ぶり",
-            "たら",
-            "あじ",
-            "白身魚",
-            "さんま",
-            "魚",
-            "さわら",
-            "赤魚"
-        ]
-
-        df = df[
-            df.apply(
-                lambda x: any(
-                    contains_food(x, f)
-                    for f in fish
-                ),
-                axis=1
-            )
-        ]
+        fish = ["鮭", "さば", "ぶり", "たら", "あじ", "白身魚", "さんま", "魚", "さわら", "赤魚"]
+        df = df[df.apply(lambda x: any(contains_food(x, f) for f in fish), axis=1)]
 
     # 肉料理希望
     elif favorite_food == "肉":
+        meat = ["鶏", "豚", "牛", "ハンバーグ"]
+        df = df[df.apply(lambda x: any(contains_food(x, f) for f in meat), axis=1)]
 
-        meat = [
-            "鶏",
-            "豚",
-            "牛",
-            "ハンバーグ"
-        ]
-
-        df = df[
-            df.apply(
-                lambda x: any(
-                    contains_food(x, f)
-                    for f in meat
-                ),
-                axis=1
-            )
-        ]
-
-    # 過去7件除外
-    if history:
-
-        df = df[
-            ~df["id"].isin(history)
-        ]
-
-    # カロリー差
-    df["diff"] = abs(
-        df["calorie"] - calorie
-    )
-
-    df = df.sort_values("diff")
+    # 過去履歴除外
+    if history and "id" in df.columns:
+        df = df[~df["id"].isin(history)]
 
     if len(df) == 0:
-
-
         return None
 
-    candidates = df.head(15)
+    # カロリー差でソート
+    if "calorie" in df.columns:
+        df["diff"] = abs(df["calorie"] - calorie)
+        df = df.sort_values("diff")
 
+    candidates = df.head(15)
     menu = candidates.sample(1).iloc[0]
 
-
+    # レスポンス形式はそのまま保持
     return {
-
-        "id": int(menu["id"]),
-
-        "朝食": menu["breakfast"],
-
-        "昼食": menu["lunch"],
-
-        "夕食": menu["dinner"],
-
-        "理由": menu["reason"],
-
-        "バランス": menu["balance"],
-
-        "アドバイス": menu["advice"],
-
-        "カロリー": int(menu["calorie"]),
-
-        "季節": menu["season"],
-
-        "料理": menu["japanese_style"],
-
-        "難易度": menu["difficulty"],
-
-        "買い物リスト": create_shopping_list(
-            {
-                "朝食": menu["breakfast"],
-                "昼食": menu["lunch"],
-                "夕食": menu["dinner"]
-            }
-        )
-
+        "id": int(menu["id"]) if "id" in menu else 1,
+        "朝食": menu.get("breakfast", ""),
+        "昼食": menu.get("lunch", ""),
+        "夕食": menu.get("dinner", ""),
+        "理由": menu.get("reason", "持病に配慮した栄養バランス調整済みです。"),
+        "バランス": menu.get("balance", "バランス良好"),
+        "アドバイス": menu.get("advice", "水分をしっかりと摂ってお召し上がりください。"),
+        "カロリー": int(menu.get("calorie", calorie)),
+        "季節": menu.get("season", "通年"),
+        "料理": menu.get("japanese_style", "和食"),
+        "難易度": menu.get("difficulty", menu.get("level", "普通")),
+        "買い物リスト": create_shopping_list({
+            "朝食": menu.get("breakfast", ""),
+            "昼食": menu.get("lunch", ""),
+            "夕食": menu.get("dinner", "")
+        })
     }

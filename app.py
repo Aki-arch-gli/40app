@@ -71,7 +71,7 @@ def generate_best_calorie_menu(age, disease, calorie, season="auto", style=None,
     best_menu = None
     min_diff = float("inf")
     
-    # 複数回抽選を行い、目標カロリーとの差(|献立カロリー - 目標カロリー|)が最も小さいものを厳選
+    # 指定の条件で試行
     for _ in range(trials):
         menu = generate_menu(
             age=age,
@@ -89,10 +89,29 @@ def generate_best_calorie_menu(age, disease, calorie, season="auto", style=None,
             if diff < min_diff:
                 min_diff = diff
                 best_menu = menu
-            # 差が10kcal以内の理想的な献立が見つかれば即時確定
             if min_diff <= 10:
                 break
-                
+
+    # 万が一難易度＋他条件が厳しく0件だった場合、難易度指定のみを緩和して再試行
+    if not best_menu and difficulty:
+        for _ in range(trials):
+            menu = generate_menu(
+                age=age,
+                disease=disease,
+                calorie=calorie,
+                season=season,
+                style=style,
+                difficulty=None,  # 難易度条件をクリアして再取得
+                dislike=dislike,
+                favorite_food=favorite_food
+            )
+            if menu:
+                menu_cal = menu.get("カロリー", calorie)
+                diff = abs(menu_cal - calorie)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_menu = menu
+
     return best_menu
 
 # ========= 強固な食材分解ユーティリティ (サラダや料理名の分解強化) =========

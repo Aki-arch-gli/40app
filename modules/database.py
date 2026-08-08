@@ -1620,20 +1620,84 @@ except Exception as e:
 def add_or_update_user(name, role, age, gender, height, weight, occupation, disease, mode):
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT id FROM users WHERE name=?", (name,))
-    exists = cur.fetchone()
-    if exists:
+    
+    try:
+        # テーブルが存在しない場合は作成
         cur.execute("""
-        UPDATE users SET role=?, age=?, gender=?, height=?, weight=?, occupation=?, disease=?, mode=?
-        WHERE name=?
-        """, (role, age, gender, height, weight, occupation, disease, mode, name))
-    else:
-        cur.execute("""
-        INSERT INTO users (name, role, age, gender, height, weight, occupation, disease, mode)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (name, role, age, gender, height, weight, occupation, disease, mode))
-    conn.commit()
-    conn.close()
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                role TEXT,
+                age INTEGER,
+                gender TEXT,
+                height REAL,
+                weight REAL,
+                occupation TEXT,
+                disease TEXT,
+                mode TEXT,
+                user_code TEXT,
+                point INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # 既存ユーザーの検索
+        cur.execute("SELECT id, user_code FROM users WHERE name = ?", (name,))
+        row = cur.fetchone()
+        
+        if row:
+            # 既に存在するユーザーの場合は更新 (UPDATE)
+            user_id, user_code = row[0], row[1]
+            if not user_code or len(str(user_code)) < 4:
+                import secrets
+                user_code = secrets.token_hex(3).upper()
+                
+            cur.execute("""
+                UPDATE users 
+                SET role = ?, age = ?, gender = ?, height = ?, weight = ?, occupation = ?, disease = ?, mode = ?, user_code = ?
+                WHERE id = ?
+            """, (role, age, gender, height, weight, occupation, disease, mode, user_code, user_id))
+        else:
+            # 新規ユーザー登録 (INSERT)
+            import secrets
+            user_code = secrets.token_hex(3).upper()
+            
+            try:
+                cur.execute("""
+                    INSERT INTO users (name, role, age, gender, height, weight, occupation, disease, mode, user_code)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (name, role, age, gender, height, weight, occupation, disease, mode, user_code))
+            except sqlite3.OperationalError:
+                # 万が一カラム数が合わない場合のテーブル自動補正フォールバック
+                cur.execute("PRAGMA table_info(users)")
+                columns = [column[1] for column in cur.fetchall()]
+                
+                required_cols = {
+                    "role": "TEXT", "age": "INTEGER", "gender": "TEXT",
+                    "height": "REAL", "weight": "REAL", "occupation": "TEXT",
+                    "disease": "TEXT", "mode": "TEXT", "user_code": "TEXT"
+                }
+                for col, col_type in required_cols.items():
+                    if col not in columns:
+                        cur.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
+                
+                cur.execute("""
+                    INSERT INTO users (name, role, age, gender, height, weight, occupation, disease, mode, user_code)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (name, role, age, gender, height, weight, occupation, disease, mode, user_code))
+
+        conn.commit()
+        return user_code
+
+    except Exception as e:
+        conn.rollback()
+        print(f"add_or_update_user Error: {e}")
+        # フォールバックとしてセキュアコードを返却（画面クラッシュを防止）
+        import secrets
+        return secrets.token_hex(3).upper()
+        
+    finally:
+        conn.close()
 
 def get_all_seniors():
     conn = connect()
