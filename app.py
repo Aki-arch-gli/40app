@@ -258,7 +258,7 @@ DEFAULT_SESSION = {
     "voice_enabled": True,
     "genki_point": 180,
     "user_role": "👴 高齢者（本人）",
-    "tutorial_finished": False,
+    "tutorial_finished": True,
     "tutorial_page": 1,
     "water_today": 1000,
     "walk_steps": 3500,
@@ -289,6 +289,62 @@ def load_external_data():
         return True
     except Exception:
         return False
+
+def generate_best_calorie_menu(age, disease, calorie, season="auto", style=None, difficulty=None, dislike=None, favorite_food=None, trials=10):
+    best_menu = None
+    min_diff = float("inf")
+    
+    # 1. フル条件で試行
+    for _ in range(trials):
+        menu = generate_menu(
+            age=age,
+            disease=disease,
+            calorie=calorie,
+            season=season,
+            style=style,
+            difficulty=difficulty,
+            dislike=dislike,
+            favorite_food=favorite_food
+        )
+        if menu:
+            menu_cal = menu.get("カロリー", calorie)
+            diff = abs(menu_cal - calorie)
+            if diff < min_diff:
+                min_diff = diff
+                best_menu = menu
+            if min_diff <= 10:
+                break
+
+    # 2. 条件が厳しすぎて該当なしの場合、難易度・好みフィルターを順次緩和して再取得
+    if not best_menu:
+        for _ in range(trials):
+            menu = generate_menu(
+                age=age,
+                disease=disease,
+                calorie=calorie,
+                season=season,
+                style=style,  # 和洋中は維持
+                difficulty=None,
+                dislike=dislike,
+                favorite_food=None
+            )
+            if menu:
+                menu_cal = menu.get("カロリー", calorie)
+                diff = abs(menu_cal - calorie)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_menu = menu
+
+    # 3. それでも無い場合の最終安全策（基本条件のみ）
+    if not best_menu:
+        best_menu = generate_menu(
+            age=age,
+            disease=disease,
+            calorie=calorie,
+            season="auto"
+        )
+
+    return best_menu
 
 # 初回起動時にバックグラウンドで1回だけ実行されるように改善
 if not st.session_state.event_update:
@@ -384,6 +440,7 @@ def save_final_water(final_amount: int):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
+
 # ========= 変数定義 =========
 username = st.session_state.senior_fullname
 user_code = st.session_state.user_code
@@ -418,7 +475,8 @@ if dark_mode:
     box_info_text = "#FFFFFF"
     tag_bg, tag_text = "#424242", "#FFFFFF"
     popover_bg, popover_text = "#2D2D2D", "#FFFFFF"
-    expander_bg, expander_text = "#1E1E1E", "#FFFFFF"
+    expander_bg, expander_text = "#2D2D2D", "#FFFFFF"
+    weekly_bg, weekly_text = "#1E1E1E", "#FFFFFF"
 else:
     bg_color, sidebar_bg, text_color = "#F4F6F9", "#FFFFFF", "#111111"
     input_bg, card_bg, box_info_bg = "#FFFFFF", "#FFFFFF", "#E3F2FD"
@@ -426,6 +484,7 @@ else:
     tag_bg, tag_text = "#E0E0E0", "#111111"
     popover_bg, popover_text = "#FFFFFF", "#111111"
     expander_bg, expander_text = "#FFFFFF", "#111111"
+    weekly_bg, weekly_text = "#FFFFFF", "#111111"
 
 st.markdown(f"""
 <style>
@@ -433,6 +492,25 @@ st.markdown(f"""
     [data-testid="stSidebar"] {{ background-color: {sidebar_bg} !important; border-right: 2px solid #DDDDDD; }}
     .stMarkdown, .stText, p, label, span, div, li, [data-testid="stWidgetLabel"] {{ color: {text_color} !important; font-weight: 600; }}
     
+    /* 🛠️ st.info (利用者情報・タイムライン枠など) のダークモード文字同化防止 */
+    div[data-testid="stAlert"] {{
+        background-color: {"#1A2A3A" if dark_mode else "#E3F2FD"} !important;
+        border: 1px solid {"#29B6F6" if dark_mode else "#0288D1"} !important;
+        border-radius: 10px !important;
+    }}
+    div[data-testid="stAlert"] * {{
+        color: {"#E0F7FA" if dark_mode else "#01579B"} !important;
+        font-weight: bold !important;
+    }}
+    
+    /* サイドバー内のインフォメーション表示 */
+    [data-testid="stSidebar"] div[data-testid="stAlert"] {{
+        background-color: {"#263238" if dark_mode else "#E3F2FD"} !important;
+    }}
+    [data-testid="stSidebar"] div[data-testid="stAlert"] * {{
+        color: {"#FFFFFF" if dark_mode else "#0D47A1"} !important;
+    }}
+
     /* フォーム・入力項目 */
     div[data-baseweb="select"] > div, input, textarea, div[data-baseweb="textarea"] > textarea {{
         background-color: {input_bg} !important;
@@ -441,16 +519,14 @@ st.markdown(f"""
         border: 1px solid #BDBDBD !important;
     }}
     
-    /* DB保存フォーム（ライトモード時の同化防止） */
+    /* DB保存フォーム枠 */
     div[data-testid="stForm"] {{
         background-color: {card_bg} !important;
         border: 1px solid #BDBDBD !important;
         border-radius: 12px !important;
         padding: 15px !important;
     }}
-    div[data-testid="stForm"] * {{
-        color: {text_color} !important;
-    }}
+    div[data-testid="stForm"] * {{ color: {text_color} !important; }}
     div[data-testid="stForm"] button, div[data-testid="stFormSubmitButton"] > button {{
         background-color: #2E7D32 !important;
         color: #FFFFFF !important;
@@ -458,24 +534,34 @@ st.markdown(f"""
         border-radius: 10px !important;
     }}
     
-    /* 週間献立 & アコーディオン (st.expander) 内の文字色・背景色強制同調 */
+    /* アコーディオン (st.expander) */
     div[data-testid="stExpander"] {{
         background-color: {expander_bg} !important;
         border: 1px solid #BDBDBD !important;
         border-radius: 10px !important;
     }}
-    div[data-testid="stExpander"] details,
-    div[data-testid="stExpander"] div[role="region"] {{
-        background-color: {expander_bg} !important;
-    }}
+    div[data-testid="stExpander"] details {{ background-color: {expander_bg} !important; }}
     div[data-testid="stExpander"] summary,
-    div[data-testid="stExpander"] summary *,
-    div[data-testid="stExpander"] p,
-    div[data-testid="stExpander"] span,
-    div[data-testid="stExpander"] div,
-    div[data-testid="stExpander"] li {{
+    div[data-testid="stExpander"] div[role="button"],
+    div[data-testid="stExpander"] [data-aria-expanded="true"] {{
+        background-color: {expander_bg} !important;
         color: {expander_text} !important;
     }}
+    div[data-testid="stExpander"] * {{ color: {expander_text} !important; }}
+    
+    /* 🍱 週間献立カード */
+    .weekly-card, 
+    div[data-testid="stExpander"]:has(.weekly-card),
+    div[data-testid="stExpander"] .weekly-card,
+    div[data-testid="stVerticalBlock"] > div:has(.weekly-card) {{
+        background-color: {weekly_bg} !important;
+        color: {weekly_text} !important;
+        border-radius: 10px;
+        padding: 10px;
+    }}
+    .weekly-card *, 
+    div[data-testid="stExpander"]:has(.weekly-card) *,
+    div[data-testid="stExpander"] .weekly-card * {{ color: {weekly_text} !important; }}
     
     /* 写真アップローダー */
     div[data-testid="stFileUploader"] {{
@@ -484,15 +570,13 @@ st.markdown(f"""
         border-radius: 12px !important;
         padding: 10px !important;
     }}
-    div[data-testid="stFileUploader"] * {{
-        color: {text_color} !important;
-    }}
+    div[data-testid="stFileUploader"] * {{ color: {text_color} !important; }}
     div[data-testid="stFileUploader"] button {{
         background-color: #1976D2 !important;
         color: #FFFFFF !important;
     }}
     
-    /* ドロップダウン・スクロール操作時の反転防止 */
+    /* ドロップダウン・ポップオーバー */
     div[data-baseweb="popover"], div[role="listbox"], ul[role="listbox"] {{ background-color: {popover_bg} !important; color: {popover_text} !important; }}
     div[role="option"], li[role="option"] {{ background-color: {popover_bg} !important; color: {popover_text} !important; }}
     div[role="option"]:hover, li[role="option"]:hover,
@@ -549,7 +633,6 @@ st.markdown(f"""
         text-align: center;
         margin-bottom: 20px;
     }}
-    .stAlert p, .stAlert div {{ color: #111111 !important; font-size: 18px !important; font-weight: bold !important; }}
 </style>
 """, unsafe_allow_html=True)
 

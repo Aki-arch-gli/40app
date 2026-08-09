@@ -2,7 +2,6 @@ import pandas as pd
 import datetime
 from modules.shopping import create_shopping_list
 
-# CSVのロードユーティリティ
 def load_menu():
     return pd.read_csv("data/menu_data.csv")
 
@@ -56,15 +55,20 @@ def generate_menu(
     if "season" in df.columns:
         df = df[(df["season"] == season) | (df["season"] == "通年")]
 
-    # 料理スタイル（和洋中）
-    if style and "japanese_style" in df.columns:
-        df = df[df["japanese_style"] == style]
+    # 🍱 料理スタイル（和洋中）フィルターの安全化（部分一致＆トリム）
+    if style and style != "指定なし" and "japanese_style" in df.columns:
+        style_clean = str(style).strip()
+        filtered_df = df[df["japanese_style"].astype(str).str.contains(style_clean, na=False)]
+        if len(filtered_df) > 0:
+            df = filtered_df
 
-    # 難易度フィルター (difficulty または level カラムの両方に対応)
-    if difficulty:
+    # ⚡ 難易度フィルター (difficulty / level 両対応)
+    if difficulty and difficulty != "指定なし":
         diff_col = "difficulty" if "difficulty" in df.columns else ("level" if "level" in df.columns else None)
         if diff_col:
-            df = df[df[diff_col].astype(str).str.contains(str(difficulty), na=False)]
+            filtered_df = df[df[diff_col].astype(str).str.contains(str(difficulty).strip(), na=False)]
+            if len(filtered_df) > 0:
+                df = filtered_df
 
     # 苦手食材フィルター
     if dislike:
@@ -78,19 +82,25 @@ def generate_menu(
                     )
                 ]
 
-    # 魚料理希望
-    if favorite_food == "魚":
-        fish = ["鮭", "さば", "ぶり", "たら", "あじ", "白身魚", "さんま", "魚", "さわら", "赤魚"]
-        df = df[df.apply(lambda x: any(contains_food(x, f) for f in fish), axis=1)]
+    # 🍖🐟 肉・魚料理希望フィルターのキーワード拡張
+    if favorite_food and favorite_food != "指定なし":
+        if favorite_food == "魚":
+            fish = ["鮭", "さけ", "サケ", "さば", "サバ", "ぶり", "ブリ", "たら", "タラ", "あじ", "アジ", "白身魚", "さんま", "サンマ", "魚", "さわら", "サワラ", "赤魚", "ツナ", "エビ", "海老", "シーフード"]
+            filtered_df = df[df.apply(lambda x: any(contains_food(x, f) for f in fish), axis=1)]
+            if len(filtered_df) > 0:
+                df = filtered_df
 
-    # 肉料理希望
-    elif favorite_food == "肉":
-        meat = ["鶏", "豚", "牛", "ハンバーグ"]
-        df = df[df.apply(lambda x: any(contains_food(x, f) for f in meat), axis=1)]
+        elif favorite_food == "肉":
+            meat = ["鶏", "チキン", "豚", "ポーク", "牛", "ビーフ", "肉", "ハンバーグ", "つくね", "ソーセージ", "ハム", "そぼろ"]
+            filtered_df = df[df.apply(lambda x: any(contains_food(x, f) for f in meat), axis=1)]
+            if len(filtered_df) > 0:
+                df = filtered_df
 
     # 過去履歴除外
     if history and "id" in df.columns:
-        df = df[~df["id"].isin(history)]
+        filtered_df = df[~df["id"].isin(history)]
+        if len(filtered_df) > 0:
+            df = filtered_df
 
     if len(df) == 0:
         return None
@@ -103,7 +113,6 @@ def generate_menu(
     candidates = df.head(15)
     menu = candidates.sample(1).iloc[0]
 
-    # レスポンス形式はそのまま保持
     return {
         "id": int(menu["id"]) if "id" in menu else 1,
         "朝食": menu.get("breakfast", ""),
