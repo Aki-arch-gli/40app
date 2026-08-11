@@ -113,6 +113,8 @@ def generate_menu(
     candidates = df.head(15)
     menu = candidates.sample(1).iloc[0]
 
+    # modules/menu_generator.py (最後の return 部分)
+
     return {
         "id": int(menu["id"]) if "id" in menu else 1,
         "朝食": menu.get("breakfast", ""),
@@ -126,8 +128,8 @@ def generate_menu(
         "料理": menu.get("japanese_style", "和食"),
         "難易度": menu.get("difficulty", menu.get("level", "普通")),
         "買い物リスト": create_shopping_list({
-            "朝食": menu.get("breakfast", ""),
-            "昼食": menu.get("lunch", ""),
-            "夕食": menu.get("dinner", "")
+            "朝食": str(menu.get("breakfast", "")),
+            "昼食": str(menu.get("lunch", "")),
+            "夕食": str(menu.get("dinner", ""))
         })
     }
