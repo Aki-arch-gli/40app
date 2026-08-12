@@ -9,3 +9,4 @@ openai
 plotly
 reportlab
 requests
+supabase

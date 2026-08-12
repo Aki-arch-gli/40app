@@ -71,6 +71,9 @@ from modules.community_news import get_local_events,get_local_news
 from modules.event_service import get_home_events, refresh_events
 
 # ========= 追加: 目標カロリーに最も近い最適献立を厳選抽出するラッパー関数 =========
+def hash_pass(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
 def generate_best_calorie_menu(age, disease, calorie, season="auto", style=None, difficulty=None, dislike=None, favorite_food=None, trials=10):
     best_menu = None
     min_diff = float("inf")
@@ -228,10 +231,8 @@ def display_resized_menu_image(
 UPLOAD_SENIOR_DIR = os.path.join("uploads", "seniors")
 UPLOAD_STUDENT_DIR = os.path.join("uploads", "students")
 
-if not os.path.exists(UPLOAD_SENIOR_DIR):
-    os.makedirs(UPLOAD_SENIOR_DIR)
-if not os.path.exists(UPLOAD_STUDENT_DIR):
-    os.makedirs(UPLOAD_STUDENT_DIR)
+os.makedirs(UPLOAD_SENIOR_DIR, exist_ok=True)
+os.makedirs(UPLOAD_STUDENT_DIR, exist_ok=True)
 
 # ========= 音声読み上げ用 JavaScript ==========
 def speak_text(text: str):
@@ -338,10 +339,6 @@ for key, value in DEFAULT_SESSION.items():
 
 # 1. テーブル作成を初回1回のみ実行（キャッシュ化）
 @st.cache_resource
-def init_db():
-    create_tables()
-
-init_db()
 
 # 2. 外部通信（イベント・ニュース取得）を初回1回のみ＆1時間キャッシュ化
 @st.cache_data(ttl=3600)
@@ -412,41 +409,157 @@ def generate_best_calorie_menu(age, disease, calorie, season="auto", style=None,
 # -----------------------------------------------------------------------------
 # 1. データベース初期化・補助関数
 # -----------------------------------------------------------------------------
+@st.cache_resource
 def init_db():
+    create_tables()
     conn = sqlite3.connect('app_data.db')
     c = conn.cursor()
-    # スタンプ用テーブル
     c.execute('''CREATE TABLE IF NOT EXISTS daily_stamps (
-                    user_id TEXT,
-                    date TEXT,
-                    action_type TEXT,
+                    user_id TEXT, date TEXT, action_type TEXT,
                     PRIMARY KEY(user_id, date, action_type)
                  )''')
-    # 元気ボタン用テーブル
     c.execute('''CREATE TABLE IF NOT EXISTS genki_status (
-                    user_id TEXT,
-                    date TEXT,
-                    timestamp TEXT,
+                    user_id TEXT, date TEXT, timestamp TEXT,
                     PRIMARY KEY(user_id, date)
                  )''')
-    # イイネ（がんばってるね）数保持テーブル
     c.execute('''CREATE TABLE IF NOT EXISTS genki_likes (
-                    target_user TEXT,
-                    date TEXT,
-                    likes INTEGER,
+                    target_user TEXT, date TEXT, likes INTEGER,
                     PRIMARY KEY(target_user, date)
+                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS user_favorites (
+                    user_id TEXT, fav_type TEXT, data_json TEXT, created_at TEXT
                  )''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# ユーザーIDの疑似セッション管理（実際はログイン機能と連携）
-if "user_id" not in st.session_state:
-    st.session_state["user_id"] = "user_001"
+# -----------------------------------------------------------------------------
+# ☁️ Supabase 接続クライアント & ユーザー認証関数（200人同時アクセス対応）
+# -----------------------------------------------------------------------------
+@st.cache_resource
+def get_supabase() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
-user_id = st.session_state["user_id"]
-today_str = datetime.date.today().strftime("%Y-%m-%d")
+def register_user_db(username, password, role, age, gender, height, weight, disease):
+    supabase = get_supabase()
+    pwd_hash = hash_pass(password)
+    u_code = secrets.token_hex(3).upper()
+    data = {
+        "username": username,
+        "password_hash": pwd_hash,
+        "role": role,
+        "age": age,
+        "gender": gender,
+        "height": height,
+        "weight": weight,
+        "disease": disease,
+        "user_code": u_code
+    }
+    try:
+        supabase.table("app_users").insert(data).execute()
+        add_or_update_user(username, role, age, gender, height, weight, "普通", disease, role)
+        return True, u_code
+    except Exception as e:
+        if "duplicate" in str(e).lower() or "unique" in str(e).lower():
+            return False, "このお名前（ユーザーID）はすでに登録されています。"
+        return False, f"登録エラー: {e}"
+
+def authenticate_user_db(username, password):
+    supabase = get_supabase()
+    pwd_hash = hash_pass(password)
+    try:
+        res = supabase.table("app_users").select("*").eq("username", username).eq("password_hash", pwd_hash).execute()
+        if res.data and len(res.data) > 0:
+            u = res.data[0]
+            return (u["username"], u["role"], u["age"], u["gender"], u["height"], u["weight"], u["disease"], u["user_code"])
+        return None
+    except Exception:
+        return None
+
+# ログインセッションの初期化
+if "is_logged_in" not in st.session_state:
+    st.session_state.is_logged_in = False
+
+# -----------------------------------------------------------------------------
+# 🟢 未ログイン（お試し・ゲスト利用）時の表示ガード制御
+# -----------------------------------------------------------------------------
+if not st.session_state.is_logged_in:
+    # 接続ごとに個別のランダムゲストIDを発行（学生同士の画面干渉を防止）
+    if "guest_id" not in st.session_state:
+        st.session_state.guest_id = f"guest_{secrets.token_hex(4)}"
+    
+    st.session_state.senior_fullname = "ゲスト（未ログイン）"
+    st.session_state.user_id = st.session_state.guest_id
+    
+    st.info("💡 **現在は「お試し（ゲスト利用）モード」です。**\n\nパスワード不要で **「🍱 献立作成」** 機能をご自由にご利用いただけます。健康記録やご家族連携機能を利用する場合はログインしてください。")
+    
+    with st.expander("🔐 ログイン / 新規ユーザー登録はこちら（タップして開く）", expanded=False):
+        login_tab1, login_tab2 = st.tabs(["🔑 ログイン", "📝 新規登録"])
+        
+        # --- 🔑 ログイン ---
+        with login_tab1:
+            with st.form("guest_login_form"):
+                l_name = st.text_input("👤 お名前（ユーザーID）", "田中 太郎")
+                l_pass = st.text_input("🔑 パスワード", type="password")
+                if st.form_submit_button("ログインして個人記録を開始", use_container_width=True):
+                    user_info = authenticate_user_db(l_name, l_pass)
+                    if user_info:
+                        st.session_state.is_logged_in = True
+                        st.session_state.senior_fullname = user_info[0]
+                        st.session_state.user_role = user_info[1]
+                        st.session_state.senior_age = user_info[2]
+                        st.session_state.senior_gender = user_info[3]
+                        st.session_state.senior_height = user_info[4]
+                        st.session_state.senior_weight = user_info[5]
+                        st.session_state.senior_disease = user_info[6]
+                        st.session_state.user_code = user_info[7]
+                        st.session_state.user_id = user_info[0]
+                        
+                        try:
+                            h_recs = get_health_records(user_info[0])
+                            if h_recs and len(h_recs) > 0 and str(h_recs[0][0]) == today_str:
+                                st.session_state.water_today = int(h_recs[0][4]) if len(h_recs[0]) > 4 and h_recs[0][4] is not None else 0
+                            else:
+                                st.session_state.water_today = 0
+                        except Exception:
+                            st.session_state.water_today = 0
+                            
+                        st.success(f"🎉 ログインしました。ようこそ {l_name} 様！")
+                        st.rerun()
+                    else:
+                        st.error("❌ お名前またはパスワードが正しくありません。")
+
+        # --- 📝 新規登録 ---
+        with login_tab2:
+            with st.form("guest_register_form"):
+                r_name = st.text_input("👤 お名前（フルネーム）", "山田 花子")
+                r_pass = st.text_input("🔑 パスワードを設定", type="password")
+                r_role = st.selectbox("立場（役割）", ["👴 高齢者（本人）", "🎓 学生・若者モード", "👨‍👩‍👧 家族アカウント", "🏥 施設職員モード"])
+                r_age = st.number_input("年齢", min_value=18, max_value=120, value=75)
+                r_gender = st.radio("性別", ["女性", "男性"], horizontal=True)
+                r_height = st.number_input("身長 (cm)", value=155.0, step=0.5)
+                r_weight = st.number_input("体重 (kg)", value=50.0, step=0.5)
+                r_disease = st.selectbox("配慮すべき持病", ["高血圧", "糖尿病", "腎臓病", "脂質異常症", "骨粗しょう症", "認知症予防", "フレイル予防", "なし"])
+                
+                if st.form_submit_button("✨ アカウントを作成してログイン", use_container_width=True):
+                    if not r_name.strip() or not r_pass.strip():
+                        st.warning("お名前とパスワードを入力してください。")
+                    else:
+                        ok, res = register_user_db(r_name, r_pass, r_role, int(r_age), r_gender, float(r_height), float(r_weight), r_disease)
+                        if ok:
+                            st.success(f"🎉 アカウントを作成しました！上記「🔑 ログイン」からログインできます。（連携コード: `{res}`）")
+                        else:
+                            st.error(f"登録エラー: {res}")
+
+    # 未ログイン時は「🍱 献立作成」ページへ固定（他の個人データタブへのアクセスを防ぐ安全ガード）
+    if st.session_state.current_page != "🍱 献立作成":
+        st.session_state.current_page = "🍱 献立作成"
+
+# 🟢 現在のユーザーIDを一元設定（重複変数を整理）
+user_id = st.session_state.user_id
 
 def add_stamp(action_name):
     """スタンプを付与する関数"""
@@ -641,8 +754,107 @@ def save_final_water(final_amount: int):
 username = st.session_state.senior_fullname
 user_code = st.session_state.user_code
 
-# ========= サイドバー =========
+# ========= サイドバー（ログイン切替 ＆ 見守りナビ） =========
 st.sidebar.title("🍱 見守りナビ")
+
+# -------------------------------------------------------------------
+# 🔑 1. ユーザー選択・簡単ログイン機能
+# -------------------------------------------------------------------
+# 登録済みユーザー一覧の取得
+seniors_data = get_all_seniors() if 'get_all_seniors' in globals() else []
+existing_users = []
+
+if seniors_data:
+    for s in seniors_data:
+        u_name = s[1] if isinstance(s, tuple) and len(s) > 1 else (s.get("name") if isinstance(s, dict) else "")
+        if u_name and u_name not in existing_users:
+            existing_users.append(u_name)
+
+if not existing_users:
+    existing_users = [st.session_state.senior_fullname]
+
+# サイドバーにドロップダウンを配置
+login_option = st.sidebar.selectbox(
+    "👤 ご利用者を選択（ログイン切替）",
+    existing_users + ["➕ 新しいご利用者を登録"],
+    index=existing_users.index(st.session_state.senior_fullname) if st.session_state.senior_fullname in existing_users else 0
+)
+
+# 【A】新規ご利用者登録モーダルフォーム
+if login_option == "➕ 新しいご利用者を登録":
+    with st.sidebar.form("new_user_sidebar_form"):
+        st.caption("📝 新しいご利用者の登録")
+        new_name = st.text_input("お名前（フルネーム）", "山田 花子")
+        new_age = st.number_input("年齢", min_value=18, max_value=120, value=75)
+        new_gender = st.radio("性別", ["女性", "男性"], horizontal=True)
+        new_disease = st.selectbox("持病・配慮事項", ["高血圧", "糖尿病", "腎臓病", "脂質異常症", "認知症予防", "フレイル予防", "なし"])
+        
+        if st.form_submit_button("✨ 登録してログイン"):
+            if new_name.strip():
+                # DB登録処理
+                code = add_or_update_user(
+                    new_name, "👴 高齢者（本人）", int(new_age), new_gender, 
+                    155.0, 50.0, "普通", new_disease, "👴 高齢者（本人）"
+                )
+                # セッション情報を新規ユーザーで初期化
+                st.session_state.senior_fullname = new_name
+                st.session_state.senior_surname = new_name.split()[0] if " " in new_name else new_name[:2]
+                st.session_state.user_code = str(code) if code else secrets.token_hex(3).upper()
+                st.session_state.senior_age = int(new_age)
+                st.session_state.senior_gender = new_gender
+                st.session_state.senior_disease = new_disease
+                st.session_state.user_id = new_name
+                st.session_state.water_today = 0
+                st.session_state.recommended_menu = None
+                
+                st.toast(f"🎉 {new_name} 様のアカウントを作成しました！")
+                st.rerun()
+
+# 【B】既存ユーザー切り替え処理
+else:
+    if login_option != st.session_state.senior_fullname:
+        st.session_state.senior_fullname = login_option
+        st.session_state.user_id = login_option
+        
+        # DBから切り替え先のユーザー情報を復元
+        u_info = get_user(login_option)
+        if u_info:
+            if isinstance(u_info, dict):
+                st.session_state.senior_age = u_info.get("age", 75)
+                st.session_state.senior_gender = u_info.get("gender", "男性")
+                st.session_state.senior_height = float(u_info.get("height", 165.0))
+                st.session_state.senior_weight = float(u_info.get("weight", 58.0))
+                st.session_state.senior_disease = u_info.get("disease", "高血圧")
+                st.session_state.user_code = str(u_info.get("user_code", secrets.token_hex(3).upper()))
+            elif isinstance(u_info, tuple):
+                st.session_state.senior_age = u_info[2] if len(u_info) > 2 else 75
+                st.session_state.senior_gender = u_info[3] if len(u_info) > 3 else "男性"
+                st.session_state.senior_height = float(u_info[4]) if len(u_info) > 4 else 165.0
+                st.session_state.senior_weight = float(u_info[5]) if len(u_info) > 5 else 58.0
+                st.session_state.senior_disease = u_info[6] if len(u_info) > 6 else "高血圧"
+                if len(u_info) > 8 and u_info[8] is not None:
+                    st.session_state.user_code = str(u_info[8])
+
+        # 当日水分量の復元
+        try:
+            h_recs = get_health_records(login_option)
+            if h_recs and len(h_recs) > 0 and str(h_recs[0][0]) == today_str:
+                st.session_state.water_today = int(h_recs[0][4]) if len(h_recs[0]) > 4 and h_recs[0][4] is not None else 0
+            else:
+                st.session_state.water_today = 0
+        except Exception:
+            st.session_state.water_today = 0
+
+        # メニュー表示の初期化
+        st.session_state.recommended_menu = None
+        st.toast(f"👤 {login_option} 様に切り替えました")
+        st.rerun()
+
+st.sidebar.divider()
+
+# -------------------------------------------------------------------
+# ⚙️ 2. 設定・画面カスタマイズ
+# -------------------------------------------------------------------
 st.session_state.dark_mode = st.sidebar.toggle("🌙 ダークモード表示", value=st.session_state.dark_mode)
 dark_mode = st.session_state.dark_mode
 
@@ -651,6 +863,10 @@ st.session_state.display_mode = st.sidebar.radio(
     ["😊 簡単モード（おすすめ）", "📊 詳細モード（栄養データ重視）"],
     index=0 if "簡単" in st.session_state.display_mode else 1
 )
+
+# 変数の再更新（現在ログイン中のユーザー情報に基づいて動的計算）
+username = st.session_state.senior_fullname
+user_code = st.session_state.user_code
 
 need_calorie = calculate_calories(
     int(st.session_state.senior_age),
@@ -661,7 +877,12 @@ need_calorie = calculate_calories(
 )
 bmi, bmi_result = calculate_bmi(float(st.session_state.senior_height), float(st.session_state.senior_weight))
 
-st.sidebar.info(f"👤 **ご利用者**: {username} 様\n🎂 **年齢/持病**: {st.session_state.senior_age}歳 / {st.session_state.senior_disease}\n🔥 **目標カロリー**: 約 {need_calorie} kcal\n🔑 **家族連携コード**: `{user_code}`")
+st.sidebar.info(
+    f"👤 **ご利用者**: {username} 様\n"
+    f"🎂 **年齢/持病**: {st.session_state.senior_age}歳 / {st.session_state.senior_disease}\n"
+    f"🔥 **目標カロリー**: 約 {need_calorie} kcal\n"
+    f"🔑 **家族連携コード**: `{user_code}`"
+)
 st.sidebar.write("※ 氏名・持病変更やモード切り替えは『⚙️ 設定』ページで行えます。")
 
 # ========= 🎨 CSSスタイル設定 =========
@@ -1343,7 +1564,7 @@ elif page == "🍱 献立作成":
         st.write("・ **佐藤 花子 様**: キザミ食 / 低糖質（8割摂取）")
         st.divider()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🍚 本日の最適献立", "📅 1週間献立＆買い物リスト", "🍳 思い出レシピ投票", "🥗 冷蔵庫のあまりもの検索"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🍚 本日の最適献立", "📅 1週間献立＆買い物リスト", "🍳 思い出レシピ投票", "🥗 冷蔵庫のあまりもの検索", "⭐ お気に入り献立"])
 # ==========================================
 # 2. 献立表示コード（既存のtab1内に組み込み）
 # ==========================================
@@ -1843,6 +2064,60 @@ elif page == "🍱 献立作成":
             else:
                 st.warning("冷蔵庫にある食材を1つ以上選択してください。")
 
+    # -------------------------------------------------------------------
+    # ⭐ 5. お気に入り献立一覧タブ（日替わり＆1週間分の閲覧・削除機能）
+    # -------------------------------------------------------------------
+    with tab5:
+        st.subheader("⭐ 保存したお気に入り献立一覧")
+        
+        # サブタブで1日分と1週間分を整理
+        fav_sub1, fav_sub2 = st.tabs(["🍚 お気に入り「本日の献立」", "📅 お気に入り「1週間献立」"])
+        
+        # --- 1日分の献立 ---
+        with fav_sub1:
+            st.markdown("##### 🍚 保存した1日分の献立")
+            if st.session_state.fav_daily_menus:
+                for idx, f_menu in enumerate(st.session_state.fav_daily_menus):
+                    with st.expander(f"⭐ お気に入り {idx+1} （推定: {f_menu.get('カロリー', need_calorie)} kcal）", expanded=(idx == 0)):
+                        col_f1, col_f2, col_f3 = st.columns(3)
+                        with col_f1:
+                            st.write(f"🌅 **朝食**: {f_menu.get('朝食', '-')}")
+                        with col_f2:
+                            st.write(f"🌞 **昼食**: {f_menu.get('昼食', '-')}")
+                        with col_f3:
+                            st.write(f"🌙 **夕食**: {f_menu.get('夕食', '-')}")
+                        
+                        st.caption(f"💡 **AIのおすすめ**: {f_menu.get('バランス', '栄養バランス良好')}")
+                        
+                        # 削除機能
+                        if st.button("🗑️ このお気に入りを削除", key=f"del_fav_daily_{idx}"):
+                            st.session_state.fav_daily_menus.pop(idx)
+                            st.toast("お気に入りを削除しました。")
+                            st.rerun()
+            else:
+                st.info("💡 まだ1日分のお気に入り献立がありません。「本日の最適献立」タブから保存してみましょう！")
+
+        # --- 1週間分の献立 ---
+        with fav_sub2:
+            st.markdown("##### 📅 保存した1週間分の献立セット")
+            if st.session_state.fav_weekly_menus:
+                for idx, w_set in enumerate(st.session_state.fav_weekly_menus):
+                    with st.expander(f"⭐ 1週間献立セット {idx+1}", expanded=(idx == 0)):
+                        if isinstance(w_set, dict):
+                            for day_k, day_v in w_set.items():
+                                st.write(f"**【{day_k}】** 朝: {day_v.get('朝食')} | 昼: {day_v.get('昼食')} | 夕: {day_v.get('夕食')}")
+                        elif isinstance(w_set, list):
+                            for day_item in w_set:
+                                st.write(f"**【{day_item.get('曜日', 'Day')}】** 朝: {day_item.get('朝食')} | 昼: {day_item.get('昼食')} | 夕: {day_item.get('夕食')}")
+                        
+                        # 削除機能
+                        if st.button("🗑️ この1週間セットを削除", key=f"del_fav_weekly_{idx}"):
+                            st.session_state.fav_weekly_menus.pop(idx)
+                            st.toast("1週間お気に入りセットを削除しました。")
+                            st.rerun()
+            else:
+                st.info("💡 まだ1週間のお気に入り献立セットがありません。「1週間献立＆買い物リスト」タブから保存してみましょう！")
+
 # -------------------------------------------------------------------
 # ページ 3: 🩺 健康記録
 # -------------------------------------------------------------------
@@ -2159,47 +2434,34 @@ elif page == "⚙️ 設定":
         c_p1, c_p2 = st.columns(2)
         with c_p1:
             min_age_val = 18 if "学生" in st.session_state.user_role else 50
-            p_age = st.number_input("年齢", min_value=min_age_val, max_value=120, value=max(min_age_val, int(st.session_state.senior_age)))
+            p_age = st.number_input("年齢", min_value=18, max_value=120, value=int(st.session_state.senior_age))
             p_height = st.number_input("身長(cm)", min_value=120.0, max_value=200.0, value=float(st.session_state.senior_height), step=0.5)
-            disease_options = ["高血圧", "糖尿病", "腎臓病", "脂質異常症", "骨粗しょう症", "認知症予防", "フレイル予防", "なし"]
-            p_disease = st.selectbox("配慮すべき持病・疾患", disease_options, index=disease_options.index(st.session_state.senior_disease) if st.session_state.senior_disease in disease_options else 0)
+            p_disease = st.selectbox("持病・配慮事項", ["なし", "高血圧", "糖尿病", "腎臓病", "脂質異常症", "認知症予防"])
         with c_p2:
-            p_bdate = st.date_input("生年月日", value=st.session_state.senior_birthdate)
+            # 🌟 ★【重要修正】2000年代生まれ（学生）も自由に選択できるように1900年〜現在までの年選択を許可
+            p_bdate = st.date_input(
+                "生年月日",
+                value=st.session_state.senior_birthdate,
+                min_value=date(1900, 1, 1),
+                max_value=date.today()
+            )
             p_weight = st.number_input("体重(kg)", min_value=30.0, max_value=150.0, value=float(st.session_state.senior_weight), step=0.5)
             p_gender = st.radio("性別", ["男性", "女性"], horizontal=True)
 
-        if st.form_submit_button("💾 プロフィール情報をDB保存更新"):
+        if st.form_submit_button("💾 プロフィール情報を更新"):
             st.session_state.senior_fullname = p_name
-            st.session_state.senior_surname = p_name.split()[0] if " " in p_name else (p_name[:2] if len(p_name)>=2 else p_name)
             st.session_state.senior_age = int(p_age)
             st.session_state.senior_height = float(p_height)
             st.session_state.senior_weight = float(p_weight)
             st.session_state.senior_disease = p_disease
             st.session_state.senior_birthdate = p_bdate
             st.session_state.senior_gender = p_gender
-            
-            saved_code = add_or_update_user(
-                p_name,
-                st.session_state.user_role,
-                int(p_age),
-                p_gender,
-                float(p_height),
-                float(p_weight),
-                "普通",
-                p_disease,
-                st.session_state.user_role
-            )
-            if saved_code and len(str(saved_code)) >= 4:
-                st.session_state.user_code = str(saved_code)
-                st.session_state.linked_senior_code = str(saved_code)
-                
-            st.success("プロフィールをデータベースへ保存しました！カロリー計算を更新します。")
+            st.success("プロフィール情報を更新しました！")
             st.rerun()
 
     st.divider()
-
-    st.subheader("🔗 ご家族連携設定（コード照会＆3要素検証）")
-    st.write(f"あなた（ご利用者）の家族連携コード: **`{st.session_state.user_code}`**")
+    st.subheader("🔗 ご家族連携設定")
+    st.write(f"あなたのご家族連携コード: **`{st.session_state.user_code}`**")
     
     col_auth1, col_auth2, col_auth3 = st.columns(3)
     with col_auth1:
