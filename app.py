@@ -761,17 +761,20 @@ st.sidebar.title("🍱 見守りナビ")
 # 🔑 1. ユーザー選択・簡単ログイン機能
 # -------------------------------------------------------------------
 # 登録済みユーザー一覧の取得
-seniors_data = get_all_seniors() if 'get_all_seniors' in globals() else []
+# 登録済みユーザー一覧の取得（Supabase安全読み出し対応）
 existing_users = []
+try:
+    supabase = get_supabase()
+    res = supabase.table("app_users").select("username").execute()
+    if res.data:
+        existing_users = [u["username"] for u in res.data if "username" in u]
+except Exception:
+    pass
 
-if seniors_data:
-    for s in seniors_data:
-        u_name = s[1] if isinstance(s, tuple) and len(s) > 1 else (s.get("name") if isinstance(s, dict) else "")
-        if u_name and u_name not in existing_users:
-            existing_users.append(u_name)
-
+# バックアップ処理（データが取得できない場合の安全ガード）
 if not existing_users:
-    existing_users = [st.session_state.senior_fullname]
+    existing_users = [st.session_state.senior_fullname] if st.session_state.senior_fullname else ["ゲスト（未ログイン）"]
+
 
 # サイドバーにドロップダウンを配置
 login_option = st.sidebar.selectbox(
@@ -817,23 +820,20 @@ else:
         st.session_state.user_id = login_option
         
         # DBから切り替え先のユーザー情報を復元
-        u_info = get_user(login_option)
-        if u_info:
-            if isinstance(u_info, dict):
+        # Supabaseから切り替え先のユーザー情報を復元
+        try:
+            supabase = get_supabase()
+            res = supabase.table("app_users").select("*").eq("username", login_option).execute()
+            if res.data and len(res.data) > 0:
+                u_info = res.data[0]
                 st.session_state.senior_age = u_info.get("age", 75)
                 st.session_state.senior_gender = u_info.get("gender", "男性")
                 st.session_state.senior_height = float(u_info.get("height", 165.0))
                 st.session_state.senior_weight = float(u_info.get("weight", 58.0))
-                st.session_state.senior_disease = u_info.get("disease", "高血圧")
+                st.session_state.senior_disease = u_info.get("disease", "なし")
                 st.session_state.user_code = str(u_info.get("user_code", secrets.token_hex(3).upper()))
-            elif isinstance(u_info, tuple):
-                st.session_state.senior_age = u_info[2] if len(u_info) > 2 else 75
-                st.session_state.senior_gender = u_info[3] if len(u_info) > 3 else "男性"
-                st.session_state.senior_height = float(u_info[4]) if len(u_info) > 4 else 165.0
-                st.session_state.senior_weight = float(u_info[5]) if len(u_info) > 5 else 58.0
-                st.session_state.senior_disease = u_info[6] if len(u_info) > 6 else "高血圧"
-                if len(u_info) > 8 and u_info[8] is not None:
-                    st.session_state.user_code = str(u_info[8])
+        except Exception:
+            pass
 
         # 当日水分量の復元
         try:
