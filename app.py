@@ -10,6 +10,7 @@ import re
 import json
 import sqlite3
 import pandas as pd
+from zoneinfo import ZoneInfo
 from PIL import Image
 from cookies_manager import EncryptedCookiesManager
 
@@ -507,6 +508,27 @@ def generate_best_calorie_menu(age, disease, calorie, season="auto", style=None,
 
     return best_menu
 
+def calculate_calories(age, gender, height, weight, activity_level="普通"):
+    # 「未回答」の場合は男性と女性の計算結果の平均値を返す
+    if gender == "未回答":
+        cal_male = calculate_calories(age, "男性", height, weight, activity_level)
+        cal_female = calculate_calories(age, "女性", height, weight, activity_level)
+        return round((cal_male + cal_female) / 2)
+
+    # 従来の男性・女性別ハリス・ベネディクト等の計算処理
+    if gender == "男性":
+        bmr = 66.47 + (13.75 * weight) + (5.00 * height) - (6.75 * age)
+    else:  # 女性
+        bmr = 655.1 + (9.56 * weight) + (1.85 * height) - (4.68 * age)
+
+    activity_multipliers = {
+        "低い": 1.2,
+        "普通": 1.5,
+        "高い": 1.75
+    }
+    multiplier = activity_multipliers.get(activity_level, 1.5)
+    return round(bmr * multiplier)
+
 # -----------------------------------------------------------------------------
 # 1. データベース初期化・補助関数
 # -----------------------------------------------------------------------------
@@ -707,7 +729,7 @@ if not st.session_state.is_logged_in:
                     r_pass = st.text_input("🔑 パスワードを設定", type="password")
                     r_role = st.selectbox("立場（役割）", ["👴 高齢者（本人）", "🎓 学生・若者モード", "👨‍👩‍👧 家族アカウント", "🏥 施設職員モード"])
                     r_age = st.number_input("年齢", min_value=18, max_value=120, value=75)
-                    r_gender = st.radio("性別", ["女性", "男性"], horizontal=True)
+                    r_gender = st.radio("性別", ["女性", "男性", "未回答"], horizontal=True)
                     r_height = st.number_input("身長 (cm)", value=155.0, step=0.5)
                     r_weight = st.number_input("体重 (kg)", value=50.0, step=0.5)
                     r_disease = st.selectbox("配慮すべき持病", ["高血圧", "糖尿病", "腎臓病", "脂質異常症", "骨粗しょう症", "認知症予防", "フレイル予防", "なし"])
@@ -1658,7 +1680,7 @@ if page == "🏠 ホーム":
                     st.rerun()
             else:
                 if st.button("🌸 今日も元気だよ！", use_container_width=True, type="primary"):
-                    now_time = datetime.datetime.now().strftime("%H:%M")
+                    now_time = datetime.datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%H:%M")
                     conn = sqlite3.connect('app_data.db')
                     c = conn.cursor()
                     c.execute("INSERT OR REPLACE INTO genki_status VALUES (?, ?, ?)", (user_id, today_str, now_time))
@@ -2906,7 +2928,11 @@ elif page == "⚙️ 設定":
         with c_p2:
             p_bdate = st.date_input("生年月日", value=st.session_state.senior_birthdate, min_value=date(1900, 1, 1), max_value=date.today())
             p_weight = st.number_input("体重(kg)", min_value=30.0, max_value=150.0, value=float(st.session_state.senior_weight), step=0.5)
-            p_gender = st.radio("性別", ["男性", "女性"], horizontal=True)
+            gender_options = ["男性", "女性", "未回答"]
+            current_gender = st.session_state.get("senior_gender", "未回答")
+            gender_idx = gender_options.index(current_gender) if current_gender in gender_options else 2
+            
+            p_gender = st.radio("性別", gender_options, index=gender_idx, horizontal=True)
 
         if st.form_submit_button("💾 プロフィール情報を更新"):
             st.session_state.senior_fullname = p_name
@@ -2917,7 +2943,7 @@ elif page == "⚙️ 設定":
             st.session_state.senior_disease = p_disease
             st.session_state.senior_birthdate = p_bdate
             st.session_state.senior_gender = p_gender
-            st.success("プロフィール情報を更新しました！")
+            st.toast("プロフィール情報を更新しました！", icon="✅")
             st.rerun()
 
     st.divider()
