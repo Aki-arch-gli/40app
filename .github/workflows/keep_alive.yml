@@ -2,9 +2,8 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    # 3日ごとに午前9時(UTC 0:00)に実行
     - cron: '0 0 */3 * *'
-  workflow_dispatch: # 手動実行用ボタンも有効化
+  workflow_dispatch:
 
 jobs:
   ping:
@@ -17,6 +16,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install supabase
 
       - name: Run keep alive script
         env:
